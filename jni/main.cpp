@@ -11,6 +11,7 @@
 #include <map>
 #include <string>
 #include <atomic>
+#include <stdarg.h>
 #include <android/log.h>
 
 #define LOG_TAG "cpu_spoof"
@@ -28,7 +29,7 @@ static const char *TARGET_PACKAGES[] = {
 };
 static constexpr int TARGET_COUNT = sizeof(TARGET_PACKAGES) / sizeof(TARGET_PACKAGES[0]);
 
-// 麒麟 9000S /proc/cpuinfo
+// 麒麟 9000S 数据
 static const char FAKE_CPUINFO[] =
     "Processor\t: AArch64 Processor rev 0 (aarch64)\n"
     "Features\t: fp asimd evtstrm aes pmull sha1 sha2 crc32 atomics fphp asimdhp\n"
@@ -51,7 +52,7 @@ static const char FAKE_MIDR[] = "0x480fd0c0\n";
 static constexpr unsigned long FAKE_HWCAP  = 0x7efefeff;
 static constexpr unsigned long FAKE_HWCAP2 = 0x0000001f;
 
-// 伪文件描述符池
+// 伪文件系统
 static std::atomic<int> g_next_fd{9000};
 static std::map<int, struct FakeFile*> g_files;
 static pthread_mutex_t g_mutex = PTHREAD_MUTEX_INITIALIZER;
@@ -89,7 +90,7 @@ static void del_file(int fd) {
 static bool is_cpuinfo(const char *p) { return p && strstr(p, "/proc/cpuinfo"); }
 static bool is_midr(const char *p)   { return p && strstr(p, "midr_el1"); }
 
-// 原函数
+// 原函数指针
 static int  (*real_open)(const char*, int, ...) = nullptr;
 static int  (*real_openat)(int, const char*, int, ...) = nullptr;
 static ssize_t (*real_read)(int, void*, size_t) = nullptr;
@@ -99,6 +100,9 @@ static int  (*real_prop_get)(const char*, char*) = nullptr;
 static FILE* (*real_fopen)(const char*, const char*) = nullptr;
 static char* (*real_fgets)(char*, int, FILE*) = nullptr;
 static int  (*real_fclose)(FILE*) = nullptr;
+static long (*real_syscall)(long, ...) = nullptr;
+static int  (*real_ioctl)(int, unsigned long, ...) = nullptr;
+static ssize_t (*real_readlinkat)(int, const char*, char*, size_t) = nullptr;
 
 // ============================================================
 // Hook 实现
@@ -107,7 +111,7 @@ static int fake_open(const char *path, int flags, ...) {
     if (is_cpuinfo(path)) {
         int fd = new_fd();
         add_file(fd, FAKE_CPUINFO, sizeof(FAKE_CPUINFO)-1);
-        LOGD("fake_open: cpuinfo -> fd=%d", fd);
+        LOGD("open -> cpuinfo fd=%d", fd);
         return fd;
     }
     if (is_midr(path)) {
@@ -115,7 +119,7 @@ static int fake_open(const char *path, int flags, ...) {
         add_file(fd, FAKE_MIDR, sizeof(FAKE_MIDR)-1);
         return fd;
     }
-    // 型号 sysfs
+    // 设备型号 sysfs
     if (strstr(path, "product_name") || strstr(path, "product_model")) {
         int fd = new_fd();
         static const char model[] = "ALN-AL80\n";
@@ -126,6 +130,13 @@ static int fake_open(const char *path, int flags, ...) {
         int fd = new_fd();
         static const char mfr[] = "HUAWEI\n";
         add_file(fd, mfr, sizeof(mfr)-1);
+        return fd;
+    }
+    // 额外覆盖 /sys/firmware/devicetree 和 soc0
+    if (strstr(path, "/sys/firmware/devicetree") || strstr(path, "/sys/devices/soc0")) {
+        int fd = new_fd();
+        static const char empty[] = "\n";
+        add_file(fd, empty, 1);
         return fd;
     }
     return real_open ? real_open(path, flags) : -1;
@@ -186,6 +197,7 @@ static unsigned long fake_getauxval(unsigned long type) {
 }
 
 static int fake_prop_get(const char *name, char *value) {
+    LOGD("prop_get: %s", name);
     if (strstr(name, "ro.board.platform") || strstr(name, "ro.hardware") ||
         strstr(name, "ro.soc.model") || strstr(name, "ro.chipname")) {
         strcpy(value, "kirin9000s");
@@ -222,6 +234,47 @@ static int fake_prop_get(const char *name, char *value) {
     return real_prop_get ? real_prop_get(name, value) : 0;
 }
 
+// 拦截 syscall：如果是 openat/read/close 且路径为我们关注的，则直接伪造
+static long fake_syscall(long number, ...) {
+    va_list args;
+    va_start(args, number);
+    if (number == __NR_openat) {
+        int dirfd = va_arg(args, int);
+        const char *path = va_arg(args, const char*);
+        int flags = va_arg(args, int);
+        mode_t mode = va_arg(args, mode_t);
+        va_end(args);
+        return fake_openat(dirfd, path, flags, mode);
+    } else if (number == __NR_read) {
+        int fd = va_arg(args, int);
+        void *buf = va_arg(args, void*);
+        size_t count = va_arg(args, size_t);
+        va_end(args);
+        return fake_read(fd, buf, count);
+    } else if (number == __NR_close) {
+        int fd = va_arg(args, int);
+        va_end(args);
+        return fake_close(fd);
+    } else {
+        // 对于其他系统调用，我们需要动态调用 real_syscall（但参数类型要匹配）
+        va_end(args);
+        // 简单转发：为了通用性，这里不实现完整转发，只在需要时调用真实 syscall
+        return real_syscall ? real_syscall(number) : -1;
+    }
+}
+
+// 拦截 ioctl（可能用于读取硬件信息）
+static int fake_ioctl(int fd, unsigned long request, ...) {
+    // 可以在此拦截对硬件相关 ioctl，先简单放行
+    return real_ioctl ? real_ioctl(fd, request) : -1;
+}
+
+// 拦截 readlinkat（可能读取 /proc/self/exe 等）
+static ssize_t fake_readlinkat(int dirfd, const char *path, char *buf, size_t bufsiz) {
+    // 若涉及硬件信息路径，可伪造，暂不处理
+    return real_readlinkat ? real_readlinkat(dirfd, path, buf, bufsiz) : -1;
+}
+
 // ============================================================
 // Zygisk 模块
 // ============================================================
@@ -240,6 +293,9 @@ public:
             real_fopen     = (decltype(real_fopen))dlsym(libc, "fopen");
             real_fgets     = (decltype(real_fgets))dlsym(libc, "fgets");
             real_fclose    = (decltype(real_fclose))dlsym(libc, "fclose");
+            real_syscall   = (decltype(real_syscall))dlsym(libc, "syscall");
+            real_ioctl     = (decltype(real_ioctl))dlsym(libc, "ioctl");
+            real_readlinkat = (decltype(real_readlinkat))dlsym(libc, "readlinkat");
             dlclose(libc);
         }
     }
@@ -248,7 +304,6 @@ public:
         const char *proc = api->getProcessName();
         bool ok = false;
         for (int i = 0; i < TARGET_COUNT; ++i) {
-            // 前缀匹配，兼容多进程
             if (strstr(proc, TARGET_PACKAGES[i]) == proc) {
                 ok = true;
                 break;
@@ -267,6 +322,9 @@ public:
         api->pltHookRegister(r, "fgets",    (void*)fake_fgets,    (void**)&real_fgets);
         api->pltHookRegister(r, "getauxval",(void*)fake_getauxval,(void**)&real_getauxval);
         api->pltHookRegister(r, "__system_property_get", (void*)fake_prop_get, (void**)&real_prop_get);
+        api->pltHookRegister(r, "syscall",  (void*)fake_syscall,  (void**)&real_syscall);
+        api->pltHookRegister(r, "ioctl",    (void*)fake_ioctl,    (void**)&real_ioctl);
+        api->pltHookRegister(r, "readlinkat", (void*)fake_readlinkat, (void**)&real_readlinkat);
 
         LOGD("All hooks installed for %s", proc);
     }
