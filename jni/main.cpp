@@ -20,9 +20,7 @@
 using zygisk::Api;
 using zygisk::AppSpecializeArgs;
 
-// ============================================================
-// 目标应用包名
-// ============================================================
+// 目标包名
 static const char *TARGET_PACKAGES[] = {
     "com.tencent.tmgp.dfm",
     "com.liuzh.deviceinfo",
@@ -30,9 +28,7 @@ static const char *TARGET_PACKAGES[] = {
 };
 static constexpr int TARGET_COUNT = sizeof(TARGET_PACKAGES) / sizeof(TARGET_PACKAGES[0]);
 
-// ============================================================
-// 麒麟 9000S 数据
-// ============================================================
+// 麒麟 9000S /proc/cpuinfo
 static const char FAKE_CPUINFO[] =
     "Processor\t: AArch64 Processor rev 0 (aarch64)\n"
     "Features\t: fp asimd evtstrm aes pmull sha1 sha2 crc32 atomics fphp asimdhp\n"
@@ -55,9 +51,7 @@ static const char FAKE_MIDR[] = "0x480fd0c0\n";
 static constexpr unsigned long FAKE_HWCAP  = 0x7efefeff;
 static constexpr unsigned long FAKE_HWCAP2 = 0x0000001f;
 
-// ============================================================
-// 伪文件系统
-// ============================================================
+// 伪文件描述符池
 static std::atomic<int> g_next_fd{9000};
 static std::map<int, struct FakeFile*> g_files;
 static pthread_mutex_t g_mutex = PTHREAD_MUTEX_INITIALIZER;
@@ -91,15 +85,11 @@ static void del_file(int fd) {
     pthread_mutex_unlock(&g_mutex);
 }
 
-// ============================================================
 // 路径判断
-// ============================================================
 static bool is_cpuinfo(const char *p) { return p && strstr(p, "/proc/cpuinfo"); }
 static bool is_midr(const char *p)   { return p && strstr(p, "midr_el1"); }
 
-// ============================================================
-// 原函数指针
-// ============================================================
+// 原函数
 static int  (*real_open)(const char*, int, ...) = nullptr;
 static int  (*real_openat)(int, const char*, int, ...) = nullptr;
 static ssize_t (*real_read)(int, void*, size_t) = nullptr;
@@ -111,13 +101,13 @@ static char* (*real_fgets)(char*, int, FILE*) = nullptr;
 static int  (*real_fclose)(FILE*) = nullptr;
 
 // ============================================================
-// 文件打开/读取 Hook
+// Hook 实现
 // ============================================================
 static int fake_open(const char *path, int flags, ...) {
     if (is_cpuinfo(path)) {
         int fd = new_fd();
         add_file(fd, FAKE_CPUINFO, sizeof(FAKE_CPUINFO)-1);
-        LOGD("fake_open: /proc/cpuinfo -> fd=%d", fd);
+        LOGD("fake_open: cpuinfo -> fd=%d", fd);
         return fd;
     }
     if (is_midr(path)) {
@@ -125,7 +115,7 @@ static int fake_open(const char *path, int flags, ...) {
         add_file(fd, FAKE_MIDR, sizeof(FAKE_MIDR)-1);
         return fd;
     }
-    // 伪装型号 sysfs
+    // 型号 sysfs
     if (strstr(path, "product_name") || strstr(path, "product_model")) {
         int fd = new_fd();
         static const char model[] = "ALN-AL80\n";
@@ -142,7 +132,6 @@ static int fake_open(const char *path, int flags, ...) {
 }
 
 static int fake_openat(int dirfd, const char *path, int flags, ...) {
-    // 直接复用 fake_open 的逻辑
     return fake_open(path, flags);
 }
 
@@ -165,7 +154,9 @@ static int fake_close(int fd) {
 }
 
 static FILE* fake_fopen(const char *filename, const char *mode) {
-    if (is_cpuinfo(filename) || is_midr(filename)) {
+    if (is_cpuinfo(filename) || is_midr(filename) ||
+        strstr(filename, "product_name") || strstr(filename, "product_model") ||
+        strstr(filename, "product_manufacturer")) {
         int fd = fake_open(filename, O_RDONLY);
         if (fd > 0) return fdopen(fd, mode);
     }
@@ -188,31 +179,22 @@ static char* fake_fgets(char *buf, int n, FILE *fp) {
     return real_fgets ? real_fgets(buf, n, fp) : nullptr;
 }
 
-// ============================================================
-// getauxval Hook
-// ============================================================
 static unsigned long fake_getauxval(unsigned long type) {
     if (type == 16) return FAKE_HWCAP;
     if (type == 26) return FAKE_HWCAP2;
     return real_getauxval ? real_getauxval(type) : 0;
 }
 
-// ============================================================
-// 系统属性 Hook
-// ============================================================
 static int fake_prop_get(const char *name, char *value) {
-    // CPU 平台
     if (strstr(name, "ro.board.platform") || strstr(name, "ro.hardware") ||
         strstr(name, "ro.soc.model") || strstr(name, "ro.chipname")) {
         strcpy(value, "kirin9000s");
         return strlen(value);
     }
-    // 掩盖联发科属性
     if (strstr(name, "ro.mediatek.platform")) {
         value[0] = 0;
         return 0;
     }
-    // 设备型号
     if (strstr(name, "ro.product.model")) {
         strcpy(value, "ALN-AL80");
         return strlen(value);
@@ -266,7 +248,8 @@ public:
         const char *proc = api->getProcessName();
         bool ok = false;
         for (int i = 0; i < TARGET_COUNT; ++i) {
-            if (strstr(proc, TARGET_PACKAGES[i]) == proc) { // 前缀匹配
+            // 前缀匹配，兼容多进程
+            if (strstr(proc, TARGET_PACKAGES[i]) == proc) {
                 ok = true;
                 break;
             }
