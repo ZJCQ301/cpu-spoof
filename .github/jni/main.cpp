@@ -12,7 +12,8 @@ using zygisk::ServerSpecializeArgs;
 
 // ⚠️ 改成你要伪装的游戏包名
 static const char *TARGET_PACKAGES[] = {
-    "com.tencent.tmgp.sgame",
+ "com.tencent.tmgp.dfm",
+"com.tencent.tmgp.sgame",
     "com.pubg.imobile",
 };
 static constexpr int TARGET_COUNT = 2;
