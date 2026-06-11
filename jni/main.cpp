@@ -24,10 +24,12 @@ using zygisk::Api;
 using zygisk::AppSpecializeArgs;
 
 // ============================================================
-// 目标游戏包名（改这里！）
+// 目标游戏 + 验证应用包名
 // ============================================================
 static const char *TARGET_PACKAGES[] = {
-    "com.tencent.tmgp.dfm"
+    "com.tencent.tmgp.dfm",
+"com.lingqing.trustattestor",
+    "com.liuzh.deviceinfo"
 };
 static constexpr int TARGET_COUNT = sizeof(TARGET_PACKAGES) / sizeof(TARGET_PACKAGES[0]);
 
@@ -122,6 +124,19 @@ static long do_openat(int dirfd, const char *path, int flags, mode_t mode) {
     if (!path) return syscall(__NR_openat, dirfd, path, flags, mode);
     if (is_cpuinfo(path)) { int fd = new_fd(); add_file(fd, FAKE_CPUINFO, sizeof(FAKE_CPUINFO)-1); return fd; }
     if (is_midr(path))   { int fd = new_fd(); add_file(fd, FAKE_MIDR, sizeof(FAKE_MIDR)-1); return fd; }
+    // 伪装设备型号 sysfs
+    if (strstr(path, "product_name") || strstr(path, "product_model")) {
+        int fd = new_fd();
+        static const char model[] = "ALN-AL80\n";
+        add_file(fd, model, sizeof(model)-1);
+        return fd;
+    }
+    if (strstr(path, "product_manufacturer")) {
+        int fd = new_fd();
+        static const char mfr[] = "HUAWEI\n";
+        add_file(fd, mfr, sizeof(mfr)-1);
+        return fd;
+    }
     if (strstr(path, "/sys/devices/system/cpu") || strstr(path, "/sys/devices/soc0")) {
         int fd = new_fd();
         static const char e[] = "\n";
@@ -201,11 +216,43 @@ static unsigned long fake_getauxval(unsigned long t) {
 }
 
 static int fake_prop_get(const char *n, char *v) {
+    // 伪装 CPU 平台
     if (strstr(n, "ro.board.platform") || strstr(n, "ro.hardware") ||
         strstr(n, "ro.soc.model") || strstr(n, "ro.chipname")) {
-        strcpy(v, "kirin9000s"); return strlen(v);
+        strcpy(v, "kirin9000s");
+        return strlen(v);
     }
-    if (strstr(n, "ro.mediatek.platform")) { v[0]=0; return 0; }
+    if (strstr(n, "ro.mediatek.platform")) {
+        v[0] = 0;
+        return 0;
+    }
+
+    // 伪装设备型号（华为 Mate 60 Pro / ALN-AL80）
+    if (strstr(n, "ro.product.model")) {
+        strcpy(v, "ALN-AL80");
+        return strlen(v);
+    }
+    if (strstr(n, "ro.product.manufacturer") || strstr(n, "ro.product.brand")) {
+        strcpy(v, "HUAWEI");
+        return strlen(v);
+    }
+    if (strstr(n, "ro.product.device")) {
+        strcpy(v, "HWALN");
+        return strlen(v);
+    }
+    if (strstr(n, "ro.build.fingerprint")) {
+        strcpy(v, "HUAWEI/ALN-AL80/HWALN:12/HUAWEIALN-AL80/103.0.0.165:user/release-keys");
+        return strlen(v);
+    }
+    if (strstr(n, "ro.build.display.id") || strstr(n, "ro.build.version.incremental")) {
+        strcpy(v, "ALN-AL80 4.0.0.165(C00E165R8P4)");
+        return strlen(v);
+    }
+    if (strstr(n, "ro.build.description")) {
+        strcpy(v, "ALN-AL80-user 12 HUAWEIALN-AL80 103.0.0.165 release-keys");
+        return strlen(v);
+    }
+
     return real_prop_get ? real_prop_get(n, v) : 0;
 }
 
