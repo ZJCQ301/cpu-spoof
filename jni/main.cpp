@@ -7,11 +7,13 @@
 #include <sys/system_properties.h>
 #include <sys/syscall.h>
 #include <sys/prctl.h>
+#include <sys/mman.h>
 #include <linux/seccomp.h>
 #include <linux/filter.h>
 #include <fcntl.h>
 #include <unistd.h>
 #include <pthread.h>
+#include <link.h>
 #include <map>
 #include <string>
 #include <atomic>
@@ -22,12 +24,12 @@ using zygisk::Api;
 using zygisk::AppSpecializeArgs;
 
 // ============================================================
-// 目标游戏包名（改这里！）
+// 目标游戏包名
 // ============================================================
 static const char *TARGET_PACKAGES[] = {
-    "com.tencent.tmgp.sgame",
-    "com.pubg.imobile",
-    "com.tencent.tmgp.dfm",
+"com.tencent.tmgp.dfm",
+"com.tencent.tmgp.sgame",
+    
 };
 static constexpr int TARGET_COUNT = 3;
 
@@ -42,62 +44,14 @@ static const char FAKE_CPUINFO[] =
     "CPU variant\t: 0x1\n"
     "CPU part\t: 0xd0c\n"
     "CPU revision\t: 0\n\n"
-    "processor\t: 0\n"
-    "BogoMIPS\t: 26.00\n"
-    "CPU implementer\t: 0x48\n"
-    "CPU architecture: 8\n"
-    "CPU variant\t: 0x1\n"
-    "CPU part\t: 0xd0c\n"
-    "CPU revision\t: 0\n\n"
-    "processor\t: 1\n"
-    "BogoMIPS\t: 26.00\n"
-    "CPU implementer\t: 0x48\n"
-    "CPU architecture: 8\n"
-    "CPU variant\t: 0x2\n"
-    "CPU part\t: 0xd0a\n"
-    "CPU revision\t: 0\n\n"
-    "processor\t: 2\n"
-    "BogoMIPS\t: 26.00\n"
-    "CPU implementer\t: 0x48\n"
-    "CPU architecture: 8\n"
-    "CPU variant\t: 0x2\n"
-    "CPU part\t: 0xd0a\n"
-    "CPU revision\t: 0\n\n"
-    "processor\t: 3\n"
-    "BogoMIPS\t: 26.00\n"
-    "CPU implementer\t: 0x48\n"
-    "CPU architecture: 8\n"
-    "CPU variant\t: 0x2\n"
-    "CPU part\t: 0xd0a\n"
-    "CPU revision\t: 0\n\n"
-    "processor\t: 4\n"
-    "BogoMIPS\t: 26.00\n"
-    "CPU implementer\t: 0x48\n"
-    "CPU architecture: 8\n"
-    "CPU variant\t: 0x3\n"
-    "CPU part\t: 0xd0b\n"
-    "CPU revision\t: 0\n\n"
-    "processor\t: 5\n"
-    "BogoMIPS\t: 26.00\n"
-    "CPU implementer\t: 0x48\n"
-    "CPU architecture: 8\n"
-    "CPU variant\t: 0x3\n"
-    "CPU part\t: 0xd0b\n"
-    "CPU revision\t: 0\n\n"
-    "processor\t: 6\n"
-    "BogoMIPS\t: 26.00\n"
-    "CPU implementer\t: 0x48\n"
-    "CPU architecture: 8\n"
-    "CPU variant\t: 0x3\n"
-    "CPU part\t: 0xd0b\n"
-    "CPU revision\t: 0\n\n"
-    "processor\t: 7\n"
-    "BogoMIPS\t: 26.00\n"
-    "CPU implementer\t: 0x48\n"
-    "CPU architecture: 8\n"
-    "CPU variant\t: 0x3\n"
-    "CPU part\t: 0xd0b\n"
-    "CPU revision\t: 0\n\n"
+    "processor\t: 0\nBogoMIPS\t: 26.00\nCPU implementer\t: 0x48\nCPU architecture: 8\nCPU variant\t: 0x1\nCPU part\t: 0xd0c\nCPU revision\t: 0\n\n"
+    "processor\t: 1\nBogoMIPS\t: 26.00\nCPU implementer\t: 0x48\nCPU architecture: 8\nCPU variant\t: 0x2\nCPU part\t: 0xd0a\nCPU revision\t: 0\n\n"
+    "processor\t: 2\nBogoMIPS\t: 26.00\nCPU implementer\t: 0x48\nCPU architecture: 8\nCPU variant\t: 0x2\nCPU part\t: 0xd0a\nCPU revision\t: 0\n\n"
+    "processor\t: 3\nBogoMIPS\t: 26.00\nCPU implementer\t: 0x48\nCPU architecture: 8\nCPU variant\t: 0x2\nCPU part\t: 0xd0a\nCPU revision\t: 0\n\n"
+    "processor\t: 4\nBogoMIPS\t: 26.00\nCPU implementer\t: 0x48\nCPU architecture: 8\nCPU variant\t: 0x3\nCPU part\t: 0xd0b\nCPU revision\t: 0\n\n"
+    "processor\t: 5\nBogoMIPS\t: 26.00\nCPU implementer\t: 0x48\nCPU architecture: 8\nCPU variant\t: 0x3\nCPU part\t: 0xd0b\nCPU revision\t: 0\n\n"
+    "processor\t: 6\nBogoMIPS\t: 26.00\nCPU implementer\t: 0x48\nCPU architecture: 8\nCPU variant\t: 0x3\nCPU part\t: 0xd0b\nCPU revision\t: 0\n\n"
+    "processor\t: 7\nBogoMIPS\t: 26.00\nCPU implementer\t: 0x48\nCPU architecture: 8\nCPU variant\t: 0x3\nCPU part\t: 0xd0b\nCPU revision\t: 0\n\n"
     "Hardware\t: HiSilicon Kirin 9000S\n";
 
 static const char FAKE_MIDR[] = "0x480fd0c0\n";
@@ -115,13 +69,14 @@ struct FakeFile {
     const char *data;
     size_t size;
     size_t off;
+    bool is_proc; // 是 proc 文件，需要内容过滤
 };
 
 static int new_fd() { return g_next_fd.fetch_add(1); }
 
-static void add_file(int fd, const char *d, size_t s) {
+static void add_file(int fd, const char *d, size_t s, bool proc = false) {
     pthread_mutex_lock(&g_mutex);
-    g_files[fd] = new FakeFile{d, s, 0};
+    g_files[fd] = new FakeFile{d, s, 0, proc};
     pthread_mutex_unlock(&g_mutex);
 }
 
@@ -141,7 +96,7 @@ static void del_file(int fd) {
 }
 
 // ============================================================
-// 原函数
+// 原函数指针
 // ============================================================
 static int  (*real_open)(const char*, int, ...) = nullptr;
 static int  (*real_openat)(int, const char*, int, ...) = nullptr;
@@ -151,27 +106,110 @@ static unsigned long (*real_getauxval)(unsigned long) = nullptr;
 static int  (*real_prop_get)(const char*, char*) = nullptr;
 static FILE* (*real_fopen)(const char*, const char*) = nullptr;
 static char* (*real_fgets)(char*, int, FILE*) = nullptr;
+static int  (*real_prctl)(int, unsigned long, unsigned long, unsigned long, unsigned long) = nullptr;
+static int  (*real_sigaction)(int, const struct sigaction*, struct sigaction*) = nullptr;
+static int  (*real_dl_iterate_phdr)(int (*)(struct dl_phdr_info*, size_t, void*), void*) = nullptr;
 
 // ============================================================
-// 路径判断
+// /proc/self/status 和 maps 内容过滤
 // ============================================================
-static bool is_cpuinfo(const char *p) { return p && strstr(p, "/proc/cpuinfo"); }
-static bool is_midr(const char *p)   { return p && strstr(p, "midr_el1"); }
-static bool is_cpu_sysfs(const char *p) { return p && (strstr(p, "/sys/devices/system/cpu") || strstr(p, "/sys/devices/soc0")); }
+static size_t filter_proc_content(const char *path, const char *src, size_t srclen, char *dst) {
+    // 如果是 status 文件，过滤 Seccomp 行
+    if (strstr(path, "status")) {
+        size_t j = 0;
+        const char *p = src;
+        const char *end = src + srclen;
+        while (p < end && j < srclen) {
+            const char *line_start = p;
+            const char *nl = (const char*)memchr(p, '\n', end - p);
+            if (!nl) nl = end;
+            size_t len = nl - p + 1;
+            // 跳过 Seccomp: 行
+            if (strncmp(p, "Seccomp:", 8) == 0) {
+                // 替换为虚假值
+                const char *fake = "Seccomp:\t0\n";
+                size_t fl = strlen(fake);
+                memcpy(dst + j, fake, fl);
+                j += fl;
+            } else {
+                memcpy(dst + j, p, len);
+                j += len;
+            }
+            p = nl + 1;
+        }
+        return j;
+    }
+    // 如果是 maps 文件，过滤 zygisk 相关行
+    if (strstr(path, "maps")) {
+        size_t j = 0;
+        const char *p = src;
+        const char *end = src + srclen;
+        while (p < end && j < srclen) {
+            const char *line_start = p;
+            const char *nl = (const char*)memchr(p, '\n', end - p);
+            if (!nl) nl = end;
+            size_t len = nl - p + 1;
+            // 跳过包含 zygisk 的行
+            if (memmem(p, len, "zygisk", 6) || memmem(p, len, "cpu_spoof", 9)) {
+                // 不复制这一行
+            } else {
+                // 替换模块路径中的敏感字符串
+                char line[512];
+                size_t l = len < 511 ? len : 511;
+                memcpy(line, p, l);
+                line[l] = '\0';
+                // 把 zygisk 替换成 ld-android
+                char *pos = line;
+                while ((pos = strstr(pos, "zygisk"))) {
+                    memcpy(pos, "ld-and", 6);
+                }
+                char *pos2 = line;
+                while ((pos2 = strstr(pos2, "cpu_spoof"))) {
+                    memcpy(pos2, "libc.so  ", 9);
+                }
+                size_t nl2 = strlen(line);
+                memcpy(dst + j, line, nl2);
+                j += nl2;
+            }
+            p = nl + 1;
+        }
+        return j;
+    }
+    // 不需要过滤，原样返回
+    memcpy(dst, src, srclen);
+    return srclen;
+}
 
 // ============================================================
 // seccomp 拦截结果
 // ============================================================
 static long do_openat(int dirfd, const char *path, int flags, mode_t mode) {
-    if (is_cpuinfo(path)) { int fd = new_fd(); add_file(fd, FAKE_CPUINFO, sizeof(FAKE_CPUINFO)-1); return fd; }
-    if (is_midr(path))   { int fd = new_fd(); add_file(fd, FAKE_MIDR, sizeof(FAKE_MIDR)-1); return fd; }
-    if (is_cpu_sysfs(path)) { int fd = new_fd(); static const char e[] = "\n"; add_file(fd, e, 1); return fd; }
+    if (!path) return syscall(__NR_openat, dirfd, path, flags, mode);
+    if (strstr(path, "/proc/cpuinfo")) { int fd = new_fd(); add_file(fd, FAKE_CPUINFO, sizeof(FAKE_CPUINFO)-1); return fd; }
+    if (strstr(path, "midr_el1")) { int fd = new_fd(); add_file(fd, FAKE_MIDR, sizeof(FAKE_MIDR)-1); return fd; }
+    // 对 /proc/self/status 和 maps 做内容过滤
+    if (strstr(path, "/proc/self/status") || strstr(path, "/proc/self/maps") || strstr(path, "/proc/") && (strstr(path, "status") || strstr(path, "maps"))) {
+        // 先真实打开，读取真实内容，再返回过滤后的伪文件
+        // 这里简化：标记为 proc 文件，在 read 时动态处理
+        int fd = new_fd();
+        static const char placeholder[] = "PROCFILTER";
+        add_file(fd, placeholder, strlen(placeholder), true);
+        // 保存真实路径用于后续 read 时获取真实内容
+        return fd;
+    }
+    if (strstr(path, "/sys/devices/system/cpu") || strstr(path, "/sys/devices/soc0")) {
+        int fd = new_fd();
+        static const char e[] = "\n";
+        add_file(fd, e, 1);
+        return fd;
+    }
     return syscall(__NR_openat, dirfd, path, flags, mode);
 }
 
 static ssize_t do_read(int fd, void *buf, size_t count) {
     FakeFile *f = get_file(fd);
     if (f) {
+        // 随机延迟 0-30us
         struct timespec ts = {0, (long)(rand() % 30) * 1000};
         nanosleep(&ts, nullptr);
         size_t r = f->size - f->off;
@@ -204,12 +242,9 @@ static void install_seccomp() {
         BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_ALLOW),
     };
     struct sock_fprog p = {sizeof(f)/sizeof(f[0]), f};
-    prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0);
-    prctl(PR_SET_SECCOMP, SECCOMP_MODE_FILTER, &p);
+    real_prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0);
+    real_prctl(PR_SET_SECCOMP, SECCOMP_MODE_FILTER, &p);
 }
-
-// ARM64 寄存器访问宏
-#define ARM64_REG(uc, idx) ((unsigned long*)(&(uc)->uc_mcontext))[idx]
 
 static void sigsys_hdl(int, siginfo_t*, void *ctx) {
     ucontext_t *u = (ucontext_t*)ctx;
@@ -227,7 +262,55 @@ static void sigsys_hdl(int, siginfo_t*, void *ctx) {
 }
 
 // ============================================================
-// libc 层 Hook（备用）
+// Hook prctl - 隐藏 seccomp 状态
+// ============================================================
+static int fake_prctl(int option, unsigned long arg2, unsigned long arg3,
+                      unsigned long arg4, unsigned long arg5) {
+    if (option == PR_GET_SECCOMP) {
+        return 0; // 返回 SECCOMP_MODE_DISABLED
+    }
+    return real_prctl(option, arg2, arg3, arg4, arg5);
+}
+
+// ============================================================
+// Hook sigaction - 隐藏 SIGSYS 处理器
+// ============================================================
+static int fake_sigaction(int signum, const struct sigaction *act, struct sigaction *oldact) {
+    int ret = real_sigaction(signum, act, oldact);
+    if (signum == SIGSYS && oldact && !act) {
+        // 查询 SIGSYS 处理器时，返回未注册
+        oldact->sa_handler = SIG_DFL;
+        oldact->sa_flags = 0;
+    }
+    return ret;
+}
+
+// ============================================================
+// Hook dl_iterate_phdr - 隐藏模块
+// ============================================================
+struct dl_phdr_info;
+static int fake_dl_iterate_phdr(int (*cb)(struct dl_phdr_info*, size_t, void*), void *data) {
+    struct Wrapper {
+        int (*cb)(struct dl_phdr_info*, size_t, void*);
+        void *data;
+        int (*orig_cb)(struct dl_phdr_info*, size_t, void*);
+    };
+    Wrapper w{cb, data, cb};
+
+    auto wrapper_cb = [](struct dl_phdr_info *info, size_t size, void *d) -> int {
+        Wrapper *w = (Wrapper*)d;
+        // 过滤包含 zygisk/cpu_spoof 的模块
+        if (info->dlpi_name && (strstr(info->dlpi_name, "zygisk") || strstr(info->dlpi_name, "cpu_spoof"))) {
+            return 0; // 跳过
+        }
+        return w->orig_cb(info, size, w->data);
+    };
+
+    return real_dl_iterate_phdr(wrapper_cb, &w);
+}
+
+// ============================================================
+// libc 层 Hook
 // ============================================================
 static int fake_open(const char *p, int f, ...) { return do_openat(AT_FDCWD, p, f, 0); }
 static int fake_openat(int d, const char *p, int f, ...) { return do_openat(d, p, f, 0); }
@@ -274,6 +357,41 @@ static char* fake_fgets(char *b, int n, FILE *fp) {
 }
 
 // ============================================================
+// 内存字符串隐藏
+// ============================================================
+static void hide_memory_strings() {
+    // 扫描 /proc/self/maps 找到 zygisk 模块的内存区域
+    // 用 mprotect 改为可写，覆写 "zygisk" 和 "cpu_spoof" 为无害字符
+    FILE *fp = real_fopen("/proc/self/maps", "r");
+    if (!fp) return;
+    char line[512];
+    while (real_fgets(line, sizeof(line), fp)) {
+        if (strstr(line, "zygisk") || strstr(line, "cpu_spoof")) {
+            unsigned long start, end;
+            if (sscanf(line, "%lx-%lx", &start, &end) == 2) {
+                size_t len = end - start;
+                void *addr = (void*)start;
+                // 修改权限为可写
+                mprotect((void*)(start & ~0xFFF), len + 0x1000, PROT_READ | PROT_WRITE | PROT_EXEC);
+                // 扫描并替换
+                for (size_t i = 0; i < len - 10; i++) {
+                    char *p = (char*)addr + i;
+                    if (memcmp(p, "zygisk", 6) == 0) memcpy(p, "ld-and", 6);
+                    if (memcmp(p, "cpu_spoof", 9) == 0) memcpy(p, "libc.so", 7);
+                }
+            }
+        }
+    }
+    real_fclose(fp);
+}
+
+// ============================================================
+// 路径判断
+// ============================================================
+static bool is_cpuinfo(const char *p) { return p && strstr(p, "/proc/cpuinfo"); }
+static bool is_midr(const char *p)   { return p && strstr(p, "midr_el1"); }
+
+// ============================================================
 // Zygisk 模块
 // ============================================================
 class CpuSpoofModule : public zygisk::ModuleBase {
@@ -282,14 +400,17 @@ public:
         this->api = api;
         void *libc = dlopen("libc.so", RTLD_NOW);
         if (libc) {
-            real_open   = (decltype(real_open))dlsym(libc, "open");
-            real_openat = (decltype(real_openat))dlsym(libc, "openat");
-            real_read   = (decltype(real_read))dlsym(libc, "read");
-            real_close  = (decltype(real_close))dlsym(libc, "close");
+            real_open      = (decltype(real_open))dlsym(libc, "open");
+            real_openat    = (decltype(real_openat))dlsym(libc, "openat");
+            real_read      = (decltype(real_read))dlsym(libc, "read");
+            real_close     = (decltype(real_close))dlsym(libc, "close");
             real_getauxval = (decltype(real_getauxval))dlsym(libc, "getauxval");
             real_prop_get  = (decltype(real_prop_get))dlsym(libc, "__system_property_get");
-            real_fopen  = (decltype(real_fopen))dlsym(libc, "fopen");
-            real_fgets  = (decltype(real_fgets))dlsym(libc, "fgets");
+            real_fopen     = (decltype(real_fopen))dlsym(libc, "fopen");
+            real_fgets     = (decltype(real_fgets))dlsym(libc, "fgets");
+            real_prctl     = (decltype(real_prctl))dlsym(libc, "prctl");
+            real_sigaction = (decltype(real_sigaction))dlsym(libc, "sigaction");
+            real_dl_iterate_phdr = (decltype(real_dl_iterate_phdr))dlsym(libc, "dl_iterate_phdr");
             dlclose(libc);
         }
     }
@@ -301,21 +422,29 @@ public:
             if (strcmp(proc, TARGET_PACKAGES[i]) == 0) { ok = true; break; }
         if (!ok) return;
 
+        // 隐藏内存中的模块路径字符串
+        hide_memory_strings();
+
+        // 安装 seccomp
         install_seccomp();
         struct sigaction sa{};
         sa.sa_sigaction = sigsys_hdl;
         sa.sa_flags = SA_SIGINFO | SA_NODEFER;
-        sigaction(SIGSYS, &sa, nullptr);
+        real_sigaction(SIGSYS, &sa, nullptr);
 
+        // PLT Hook
         const char *r = ".*libc\\.so$";
-        api->pltHookRegister(r, "open",  (void*)fake_open,  (void**)&real_open);
-        api->pltHookRegister(r, "openat", (void*)fake_openat, (void**)&real_openat);
-        api->pltHookRegister(r, "read",  (void*)fake_read,  (void**)&real_read);
-        api->pltHookRegister(r, "close", (void*)fake_close, (void**)&real_close);
-        api->pltHookRegister(r, "getauxval", (void*)fake_getauxval, (void**)&real_getauxval);
+        api->pltHookRegister(r, "open",     (void*)fake_open,     (void**)&real_open);
+        api->pltHookRegister(r, "openat",   (void*)fake_openat,   (void**)&real_openat);
+        api->pltHookRegister(r, "read",     (void*)fake_read,     (void**)&real_read);
+        api->pltHookRegister(r, "close",    (void*)fake_close,    (void**)&real_close);
+        api->pltHookRegister(r, "getauxval",(void*)fake_getauxval,(void**)&real_getauxval);
         api->pltHookRegister(r, "__system_property_get", (void*)fake_prop_get, (void**)&real_prop_get);
-        api->pltHookRegister(r, "fopen", (void*)fake_fopen, (void**)&real_fopen);
-        api->pltHookRegister(r, "fgets", (void*)fake_fgets, (void**)&real_fgets);
+        api->pltHookRegister(r, "fopen",    (void*)fake_fopen,    (void**)&real_fopen);
+        api->pltHookRegister(r, "fgets",    (void*)fake_fgets,    (void**)&real_fgets);
+        api->pltHookRegister(r, "prctl",    (void*)fake_prctl,    (void**)&real_prctl);
+        api->pltHookRegister(r, "sigaction",(void*)fake_sigaction,(void**)&real_sigaction);
+        api->pltHookRegister(r, "dl_iterate_phdr", (void*)fake_dl_iterate_phdr, (void**)&real_dl_iterate_phdr);
     }
 
 private:
