@@ -29,7 +29,7 @@ using zygisk::AppSpecializeArgs;
 static const char *TARGET_PACKAGES[] = {
     "com.tencent.tmgp.dfm"
 };
-static constexpr int TARGET_COUNT = 3;
+static constexpr int TARGET_COUNT = sizeof(TARGET_PACKAGES) / sizeof(TARGET_PACKAGES[0]);
 
 // ============================================================
 // 麒麟 9000S 数据
