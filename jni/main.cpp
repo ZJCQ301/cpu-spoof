@@ -208,19 +208,22 @@ static void install_seccomp() {
     prctl(PR_SET_SECCOMP, SECCOMP_MODE_FILTER, &p);
 }
 
+// ARM64 寄存器访问宏
+#define ARM64_REG(uc, idx) ((unsigned long*)(&(uc)->uc_mcontext))[idx]
+
 static void sigsys_hdl(int, siginfo_t*, void *ctx) {
     ucontext_t *u = (ucontext_t*)ctx;
-    long nr = u->uc_mcontext.regs[8];
+    unsigned long *regs = (unsigned long*)&u->uc_mcontext;
+    long nr = regs[8];
     long ret = -1;
     if (nr == __NR_openat) {
-        ret = do_openat(u->uc_mcontext.regs[0], (const char*)u->uc_mcontext.regs[1],
-                        (int)u->uc_mcontext.regs[2], (mode_t)u->uc_mcontext.regs[3]);
+        ret = do_openat(regs[0], (const char*)regs[1], (int)regs[2], (mode_t)regs[3]);
     } else if (nr == __NR_read) {
-        ret = do_read(u->uc_mcontext.regs[0], (void*)u->uc_mcontext.regs[1], u->uc_mcontext.regs[2]);
+        ret = do_read(regs[0], (void*)regs[1], regs[2]);
     } else if (nr == __NR_close) {
-        ret = do_close(u->uc_mcontext.regs[0]);
+        ret = do_close(regs[0]);
     }
-    u->uc_mcontext.regs[0] = ret;
+    regs[0] = ret;
 }
 
 // ============================================================
